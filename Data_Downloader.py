@@ -232,6 +232,26 @@ class Bybit_Downloader():
         else:
             end_time = int(end.timestamp())
 
+        #first check that data exists at the start timestamp:
+        success = True
+        try:
+            ans = self.client.query_mark_price_kline(symbol=symbol,
+                                                     interval=fundamental_period,
+                                                     from_time=str(start_time)
+                                                     )
+            data = ans['result']
+            first_available_timestamp = data[0]['start_at']
+            if first_available_timestamp > start_time:
+                print('data not available on Bybit before ', datetime.fromtimestamp(first_available_timestamp))
+                start_time = first_available_timestamp
+        except Exception as e:
+            success = False
+
+        if not success:  # try again
+            time.sleep(10)
+            self.download(symbol, fundamental_period, start, end, save_file, print_info)
+        assert end_time > start_time, 'wrong start end dates provided in download'
+
         # api returns batches of 200 candles only, need to iterate over
         success = True
         time_list = []
@@ -260,6 +280,8 @@ class Bybit_Downloader():
                                                          from_time=str(start_time)
                                                          )
                 data = ans['result']
+                print(data[0]['start_at'])
+                print(datetime.fromtimestamp(data[0]['start_at']))
             except Exception as e:
                 success = False
                 print(e)
