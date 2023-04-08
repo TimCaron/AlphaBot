@@ -1,26 +1,26 @@
-from __future__ import absolute_import, with_statement
-import os.path
-from binance.client import Client
-import pickle
-from pybit.usdt_perpetual import HTTP
 import csv
-from datetime import datetime
+import os
+import multiprocessing as mp
 import numpy as np
-from datetime import timezone
-import settings
+import settings as settings
+import config
+from binance.client import Client
+from pybit.usdt_perpetual import HTTP
+from datetime import datetime, timezone
 import time
 
-def cut_midnight(filepath, fundamental_period, print_info):
-    '''Helper. Loads the data at filepath, and overwrite it with cut data that that starts at the closest timestamps == midnight
-    and last candle starts at midnight - fundamental_period
-    #therefore doesnt work for period larger than one day:'''
-    assert fundamental_period < 1440, 'not implemented for candles larger or equal to one day'
-    # see below, wont work either for non multple of 60 if period > 60
-    if fundamental_period >60:
-        assert fundamental_period%60 ==0, 'candle size must be multiple of one hour'
 
-    data = np.load(filepath)
+def cut_midnight(symbol, filepath, fundamental_period, print_info):
+    '''Helper. Loads the data at filepath, and overwrite it with cut data that that starts at the closest timestamps == midnight'''
+    if fundamental_period >= 1440:
+        # not needed since it will already start at midnight
+        return
+
+    # see below, won't work either for non-multiple of 60 if period > 60
+    if fundamental_period >60: assert fundamental_period%60 ==0, 'candle size must be multiple of one hour when they are greater than one hour'
+
     # data shall start at midnight
+    data = np.load(filepath)
     if datetime.fromtimestamp(data[0,0], tz = timezone.utc).hour == 0 \
             and datetime.fromtimestamp(data[0,0], tz = timezone.utc).minute ==0:
         pass
@@ -34,50 +34,26 @@ def cut_midnight(filepath, fundamental_period, print_info):
             else:
                 k += 1
         data = data[k:, :]
-
-    # data shall end at midnight - period
-    if fundamental_period <=60:
-        hour_stop = 23
-        minute_stop = 60 - fundamental_period
-    else:
-        hour_stop = 24 - fundamental_period//60
-        minute_stop = 0
-    if datetime.fromtimestamp(data[-1, 0], tz=timezone.utc).hour == hour_stop \
-            and datetime.fromtimestamp(data[-1, 0], tz=timezone.utc).minute == minute_stop:
-        pass
-    else:
-        data = np.flipud(data)
-        k = 0
-        found = False
-        while not found:
-            if datetime.fromtimestamp(data[k, 0], tz=timezone.utc).hour == hour_stop \
-                    and datetime.fromtimestamp(data[k, 0],tz=timezone.utc).minute == minute_stop:
-                found = True
-            else:
-                k += 1
-        data = data[k:, :]
-        data = np.flipud(data)
-
-    #saving data to same filepath (overwrite)
-    np.save(filepath, data)
+        #saving data to same filepath (overwrite)
+        np.save(filepath, data)
 
     if print_info:
         data = np.load(filepath)
-        print('data starts/ends at', datetime.fromtimestamp(data[0, 0], tz=timezone.utc),
+        print(symbol, 'data starts/ends at', datetime.fromtimestamp(data[0, 0], tz=timezone.utc),
               datetime.fromtimestamp(data[-1, 0], tz=timezone.utc))
 
 
-class Binance_Downloader():
 
+class Binance_Downloader():
     def __init__(self):
         api_key = settings.binance_public_key
         api_secret = settings.binance_secret_key
         assert len(api_key) !=0, 'you need to provide a valid api key for binance'
         assert len(api_secret) !=0, 'you need to provide a valid api key for binance'
         self.client = Client(api_key, api_secret)
-        # todo probably doenst require auth ; check API docs
+        # todo probably doesnt require auth ; check API docs ; anyway
 
-    def download(self, symbol, fundamental_period, start, end = None, save_file = True, print_info = True):
+    def download(self, symbol, fundamental_period, start, end = None, print_info = True):
         '''Downloads the data
         :param symbol: str, eg. 'BTCUSDT'
         :param fundamental_period: int; candle size in minutes
@@ -86,11 +62,12 @@ class Binance_Downloader():
         If start date is before actual data exists, binance will automatically starts the download at
         the first available timestamp
         '''
-
         if not os.path.exists('binance_data/'):
             os.makedirs('binance_data/')
         if not os.path.exists('binance_data/downloads/'):
             os.makedirs('binance_data/downloads')
+
+        filepath_npy = 'binance_data/downloads/' + symbol + str(fundamental_period) + '.npy'
 
         # needs to have format, eg. "1 Jun, 2020"
         binance_start = str(start.day) + ' ' + self.number_to_month(start.month) + ', ' + str(start.year)
@@ -134,33 +111,34 @@ class Binance_Downloader():
             binance_start,
             binance_end,
         )
+
         alldata = self.from_klines_to_list(klines)
+        print('download done')
+        first_available_timestamp = alldata[0][0] #unix timestamp
+        requested_start = start.timestamp()
+        if first_available_timestamp > requested_start:
+            print('WARNING: data not available on Binance before ', datetime.fromtimestamp(first_available_timestamp),
+                  ' for symbol ', symbol)
 
         with open(filepath_csv, 'w') as myfile:
             csvwriter = csv.writer(myfile)
             for row in alldata:
-                # append only valid points / might happen:
+                # append only valid points / since this might happen:
                 if datetime.fromtimestamp(row[0]).minute%fundamental_period !=0 and datetime.fromtimestamp(row[0]).second !=0:
                     pass
                 else:
                     csvwriter.writerow(row)
 
         myfile.close()
-
-        filepath_npy = 'binance_data/downloads/' + symbol + str(fundamental_period) + '.npy'
-        if save_file:
-            d = np.loadtxt(filepath_csv, delimiter=',')
-            np.save(filepath_npy, d)
-            #default we start data at midnight/end at midnight
-            cut_midnight(filepath_npy, fundamental_period, print_info)
-            return
-        else:
-            return np.loadtxt(filepath_csv, delimiter=',')
+        d = np.loadtxt(filepath_csv, delimiter=',')
+        np.save(filepath_npy, d)
+        cut_midnight(symbol, filepath_npy, fundamental_period, print_info)
+        os.remove(filepath_csv)
 
     def from_klines_to_list(self, klines):
         alldata = []
         for elem in klines:
-            #format open timestamp/ end bar timestamp/ohlcv
+            #format open timestamp/ end bar timestamp/ohlcv ; in milliseconds so need to /1000
             data = []
             data.append(int(elem[0] / 1000))
             data.append(int(elem[6] / 1000))
@@ -180,25 +158,6 @@ class Binance_Downloader():
         months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
         return months[month-1]
 
-    def get_ticksizes(self):
-        if os.path.exists('binance_data/ticksizes'):
-            with open ('binance_data/ticksizes', 'rb') as f:
-                ticksizes = pickle.load(f)
-            f.close()
-            return ticksizes
-
-        info = self.client.futures_exchange_info()
-        assets = info['symbols']
-        ticksizes = {}
-        for elem in assets:
-            sym = elem['symbol']
-            filters = elem['filters'][0]['tickSize']
-            ticksizes.update({sym : eval(filters)})
-        with open('binance_data/ticksizes', 'wb') as f:
-            ticksizes = pickle.dump(ticksizes, f)
-        f.close()
-        return ticksizes
-
 
 class Bybit_Downloader():
 
@@ -213,7 +172,7 @@ class Bybit_Downloader():
             api_secret=api_secret)
         # todo probably doenst require auth ; check API docs
 
-    def download(self, symbol, fundamental_period, start, end=None, save_file=True, print_info = True):
+    def download(self, symbol, fundamental_period, start, end=None, print_info = True):
         '''Downloads the data
         :param symbol: str, eg. 'BTCUSDT'
         :param fundamental_period: int; candle size in minutes
@@ -235,21 +194,27 @@ class Bybit_Downloader():
         #first check that data exists at the start timestamp:
         success = True
         try:
+            if fundamental_period == 1440:
+                interval = 'D'  # special Bybit api encoding
+            else: interval = fundamental_period
             ans = self.client.query_mark_price_kline(symbol=symbol,
-                                                     interval=fundamental_period,
+                                                     interval=interval,
                                                      from_time=str(start_time)
                                                      )
             data = ans['result']
             first_available_timestamp = data[0]['start_at']
             if first_available_timestamp > start_time:
-                print('data not available on Bybit before ', datetime.fromtimestamp(first_available_timestamp))
+                print('WARNING: data not available on Bybit before ', datetime.fromtimestamp(first_available_timestamp), ' for symbol ', symbol)
                 start_time = first_available_timestamp
+
         except Exception as e:
+            print('exception', e)
+            print('Note that allowed intervals are', '1 3 5 15 30 60 120 240 360 720 D M W')
             success = False
 
         if not success:  # try again
             time.sleep(10)
-            self.download(symbol, fundamental_period, start, end, save_file, print_info)
+            self.download(symbol, fundamental_period, start, end, print_info)
         assert end_time > start_time, 'wrong start end dates provided in download'
 
         # api returns batches of 200 candles only, need to iterate over
@@ -275,8 +240,12 @@ class Bybit_Downloader():
             # start time must be a string ; this downloads the markprice of usdt futures
             # changes required if you want inverse perpetuals or spot data
             try:
+                if fundamental_period == 1440:
+                    interval = 'D'  # special Bybit api encoding
+                else:
+                    interval = fundamental_period
                 ans = self.client.query_mark_price_kline(symbol=symbol,
-                                                         interval=fundamental_period,
+                                                         interval=interval,
                                                          from_time=str(start_time)
                                                          )
                 data = ans['result']
@@ -287,8 +256,9 @@ class Bybit_Downloader():
                 print(e)
 
             if not success:  # try again
+                print('something went wrong, retrying download in 10secs')
                 time.sleep(10)
-                self.download(symbol, fundamental_period, start, end, save_file, print_info)
+                self.download(symbol, fundamental_period, start, end, print_info)
 
             # last query may return an empty list #todo unclear why/when
             if len(data) == 0:
@@ -315,7 +285,7 @@ class Bybit_Downloader():
                 h.append(candle['high'])
                 l.append(candle['low'])
                 c.append(candle['close'])
-                # usdt future mark price doesn't return any volume information, try spot
+                # usdt future mark price doesn't return any volume information, try spot ? if you need volume
                 v.append(0)
 
             # avoid api rate limit
@@ -325,26 +295,28 @@ class Bybit_Downloader():
         X = np.transpose(np.array([opening_ts, closing_ts, o, h, l, c, v]))
         fp = 'bybit_data/downloads/' + symbol + str(fundamental_period) + '.npy'
         np.save(fp, X)
-        cut_midnight(fp, fundamental_period, print_info)
+        cut_midnight(symbol, fp, fundamental_period, print_info)
+
+
     def append_data(self):
         # just append data if you already have some; but not the last points
         raise NotImplementedError
 
-    def get_ticksizes(self):
-        if os.path.exists('bybit_data/ticksizes'):
-            with open('bybit_data/ticksizes', 'rb') as f:
-                ticksizes = pickle.load(f)
-            f.close()
-            return ticksizes
 
-        ans = self.client.query_symbol()['result']
-        ticksizes = {}
-        for elem in ans:
-            ticksize = elem['price_filter']['tick_size']
-            ticksizes.update({elem['name']: eval(ticksize)})
-        with open('bybit_data/ticksizes', 'wb') as f:
-            ticksizes = pickle.dump(ticksizes, f)
-        f.close()
-        return ticksizes
+# wrapper function for task
+def download_wrapper(args):
+    return Binance_Downloader().download(*args)
 
+def parralel_download_binance(symbol_list, fundamental_period, start, end):
+    '''for binance only ; for bybit you dont want to hit the rate limit of the API'''
+    tasks = []
+    for symbol in symbol_list:
+        tasks.append([symbol, fundamental_period, start, end])
 
+    print(tasks)
+    print('downloading ', len(tasks), ' symbols')
+    mp_pool = mp.Pool(config.CPU)
+    asyncResult = mp_pool.map_async(download_wrapper, tasks)
+    asyncResult.get()
+    mp_pool.close()
+    mp_pool.join()

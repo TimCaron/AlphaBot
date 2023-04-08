@@ -1,5 +1,6 @@
 import numpy as np
 from datetime import datetime, timezone
+import config
 
 def affine_completion(starting, ending, size, delta_t):
     '''performs affine completion between starting and ending timestamps
@@ -105,7 +106,8 @@ class Data_Cleaner():
             self.complete_data()
 
             #enforce that previous close == next open (? not sure about that one, it shd be true, but its not on the data)
-            self.close_correction()
+            if config.close_correction:
+                self.close_correction()
             #if you do, then you have sometimes high that is not the high, and same for low
             self.high_low_correction()
 
@@ -157,3 +159,4 @@ class Data_Cleaner():
         L = self.dat.shape[0]
         for i in range(L - 1):
             self.dat[i, 5] = self.dat[i+1, 2] #close at time i matched to open at time i+1
+
