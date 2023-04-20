@@ -7,7 +7,7 @@ pip install pybit
 and 
 pip install python-binance
 
-- Note that bybit Downloader works with bybit API v2, so you need pybit v2.4.1 , but not later versions that moved to v3 and v5 API, in my understanding.
+- Note that bybit Downloader works with bybit API v2, so you need pybit v2.4.1, but no later versions that works for v3 and v5 API (my understanding).
 
 - Run example.py to get some basic usage ; see below for a detailed description;
 
@@ -30,9 +30,9 @@ Here is a detailed description of all the files.
 - settings.py : where you need to put your API keys
 
 - Data_Downloader class has two classes one for Binance, one for Bybit:
-  - python-binance and pybit required (this is V2 of API, hence pybit 2.4.1 is fine; not higher since it would go to V3 or V5 and code wont work)
+  - python-binance and pybit required (this is V2 of API, hence pybit 2.4.1 is fine; not higher since it would go to V3 or V5 and code wouldn't work)
   - main function for both is def download(self, symbol, fundamental_period, start, end = None, print_info = True) that downloads in candles of size "fundamental_period" for some start and optional end date (datetime objects)
-  - this methods do not check whether downloaded data already exists or not, and will simply overwrite the files
+  - this method does not check whether downloaded data already exists or not, and will simply overwrite the files
   - todo add append_new_data method
   - todo check api rate limit of bybit : we can probably speed up the download
   - binance download is pretty slow, so I added a parrallel downloader that downloads multilple symbols at the same time; I never encountered API rate limits even downloading 40 symbols at the same time. Syntax is def parralel_download_binance(symbol_list, fundamental_period, start, end)
